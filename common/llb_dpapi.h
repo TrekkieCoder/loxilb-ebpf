@@ -29,7 +29,7 @@
 #define LLB_TMAC_MAP_ENTRIES  (2*1024)
 #define LLB_DMAC_MAP_ENTRIES  (8*1024)
 #define LLB_NATV4_MAP_ENTRIES (4*1024)
-#define LLB_NATV4_STAT_MAP_ENTRIES (4*16*1024) /* 16 end-points */
+#define LLB_NATV4_STAT_MAP_ENTRIES (4*1500*1024) /* 1500 end-points */
 #define LLB_NAT_EP_MAP_ENTRIES (4*1024)
 #define LLB_NAT_SEP_MAP_ENTRIES (40*1500)
 #define LLB_SMAC_MAP_ENTRIES  (LLB_DMAC_MAP_ENTRIES)
@@ -65,7 +65,7 @@
 #define LLB_DP_PKT_SLOW_PGM_ID (1)
 #define LLB_DP_PKT_PGM_ID      (0)
 
-#define LLB_NAT_STAT_CID(rid, aid) ((((rid) & 0xfff) << 4) | (aid & 0xf))
+#define LLB_NAT_STAT_CID(rid, aid) ((((rid) & 0xfff) << 12) | (aid & 0xfff))
 
 /* Hard-timeout of 40s for fc dp entry */
 #define FC_V4_DPTO            (60000000000)

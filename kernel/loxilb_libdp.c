@@ -37,6 +37,7 @@
 #include "loxilb_libdp.h"
 #include "llb_kern_mon.h"
 #include "loxilb_libdp.skel.h"
+#include "../common/uthash.h"
 #include "../common/pdi.h"
 #include "../common/common_frame.h"
 #include "../common/sockproxy.h"
@@ -79,10 +80,33 @@ typedef struct llb_dp_map {
   pthread_rwlock_t stat_lock;
 } llb_dp_map_t;
 
+typedef struct llb_ep_stats {
+  uint64_t bytes;
+  uint64_t packets;
+  uint64_t pps;
+  uint64_t bps;
+} llb_ep_stats_t;
+
+typedef struct llb_ep_rinfo {
+  uint32_t rid;
+  uint32_t aid;
+  int valid;
+} llb_ep_rinfo_t;
+
+typedef struct llb_ep_elem {
+  uint32_t epip;
+  int ref;
+  llb_ep_rinfo_t rinfo[LLB_MAX_NXFRMS];
+#define MAX_STAT_INST 5
+  llb_ep_stats_t stat_inst[MAX_STAT_INST];
+  UT_hash_handle hh;
+} llb_ep_elem_t;
+
 typedef struct llb_dp_struct
 {
   pthread_rwlock_t lock;
   pthread_rwlock_t mplock;
+  llb_ep_elem_t *ephash;
   const char *ll_dp_fname;
   const char *ll_tc_fname;
   const char *ll_dp_dfl_sec;
@@ -2163,6 +2187,90 @@ llb_map2fd(int t)
 static void ll_map_ct_rm_related(uint32_t rid, uint32_t *aids, int naid);
 
 static int
+llb_add_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
+{
+  int i = 0;
+  llb_ep_elem_t *epe = NULL;
+  llb_ep_rinfo_t *rinfo;
+  HASH_FIND_INT(xh->ephash, &xip, epe);
+
+  if (epe != NULL) {
+    int valid = -1;
+    for (i = 0; i < LLB_MAX_NXFRMS; i++) {
+      rinfo = &epe->rinfo[i];
+
+      if (rinfo->rid == rid && rinfo->aid == aid) {
+        break;
+      }
+
+      if (!rinfo->valid) {
+        valid = i;
+      }
+    }
+
+    if (i >= LLB_MAX_NXFRMS  && valid >= 0) {
+      rinfo = &epe->rinfo[valid];
+      rinfo->rid = rid;
+      rinfo->aid = aid;
+      rinfo->valid = 1;
+      epe->ref++;
+      return 0;
+    }
+    return -1;
+  }
+
+  epe = calloc(1, sizeof(*epe));
+  if (epe == NULL) {
+    return -1;
+  }
+  epe->epip = xip;
+  rinfo = &epe->rinfo[0];
+  rinfo->rid = rid;
+  rinfo->aid = aid;
+  rinfo->valid = 1;
+  epe->ref++;
+
+  HASH_ADD_INT(xh->ephash, epip, epe);
+
+  return 0;
+}
+
+static int
+llb_delete_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
+{
+  int i = 0;
+  llb_ep_elem_t *epe = NULL;
+  llb_ep_rinfo_t *rinfo;
+  HASH_FIND_INT(xh->ephash, &xip, epe);
+
+  if (epe != NULL) {
+    for (i = 0; i < LLB_MAX_NXFRMS; i++) {
+      rinfo = &epe->rinfo[i];
+
+      if (rinfo->rid == rid && rinfo->aid == aid) {
+        break;
+      }
+    }
+
+    if (i < LLB_MAX_NXFRMS) {
+      llb_ep_rinfo_t *rinfo = &epe->rinfo[i];
+      rinfo->rid = 0;
+      rinfo->aid = 0;
+      rinfo->valid = 0;
+      epe->ref--;
+      if (epe->ref <= 0) {
+        HASH_DEL(xh->ephash, epe);
+      }
+      return 0;
+    }
+    return -1;
+  }
+
+  /* Not Found */
+  return -1;
+}
+
+static int
 llb_add_map_elem_nat_post_proc(void *k, void *v)
 {
   struct dp_proxy_tacts *na = v;
@@ -3403,7 +3511,6 @@ static void
 ll_map_ct_rm_any(void)
 {
   dp_map_ita_t it;
-  int i = 0;
   struct dp_ct_key next_key;
   struct dp_ct_tact *adat;
   ct_arg_struct_t *as;
