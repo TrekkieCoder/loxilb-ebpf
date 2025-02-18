@@ -2186,12 +2186,33 @@ llb_map2fd(int t)
 
 static void ll_map_ct_rm_related(uint32_t rid, uint32_t *aids, int naid);
 
+static void
+llb_dump_nat_eps(void)
+{
+  llb_ep_elem_t *epe, *tepe;
+  HASH_ITER(hh, xh->ephash, epe, tepe) {
+    printf("End_point  0x%lx :", (unsigned long)epe->epip); 
+    for (int i = 0; i < LLB_MAX_NXFRMS; i++) {
+      llb_ep_rinfo_t * rinfo = &epe->rinfo[i];
+      if (rinfo->valid) {
+        printf("rid %u aid %u", rinfo->rid, rinfo->aid);
+      }
+    }
+    printf("\n");
+  }
+}
+
 static int
 llb_add_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
 {
   int i = 0;
   llb_ep_elem_t *epe = NULL;
   llb_ep_rinfo_t *rinfo;
+  char ab1[INET6_ADDRSTRLEN];
+  const char *host = inet_ntop(AF_INET, (struct in_addr *)&xip, ab1, INET_ADDRSTRLEN);
+
+  log_trace("Adding ep %s rid %lu aid %lu", host, rid, aid);
+
   HASH_FIND_INT(xh->ephash, &xip, epe);
 
   if (epe != NULL) {
@@ -2216,6 +2237,8 @@ llb_add_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
       epe->ref++;
       return 0;
     }
+
+    log_error("Adding ep %s rid %lu aid %lu:failed", host, rid, aid);
     return -1;
   }
 
@@ -2232,6 +2255,8 @@ llb_add_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
 
   HASH_ADD_INT(xh->ephash, epip, epe);
 
+  log_info("Added ep %s rid %lu aid %lu", host, rid, aid);
+
   return 0;
 }
 
@@ -2241,6 +2266,15 @@ llb_delete_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
   int i = 0;
   llb_ep_elem_t *epe = NULL;
   llb_ep_rinfo_t *rinfo;
+  char ab1[INET6_ADDRSTRLEN];
+  const char *host = inet_ntop(AF_INET, (struct in_addr *)&xip, ab1, INET_ADDRSTRLEN);
+
+  if (!xip || aid >= LLB_MAX_NXFRMS) {
+    return -1;
+  }
+
+  log_trace("Deleting ep %s rid %lu aid %lu", host, rid, aid);
+
   HASH_FIND_INT(xh->ephash, &xip, epe);
 
   if (epe != NULL) {
@@ -2259,14 +2293,18 @@ llb_delete_nat_ep(uint32_t xip, uint32_t rid, uint32_t aid)
       rinfo->valid = 0;
       epe->ref--;
       if (epe->ref <= 0) {
+        log_debug("Deleted xip %s rid %lu aid %lu", ab1, rid, aid);
         HASH_DEL(xh->ephash, epe);
       }
+      llb_dump_nat_eps();
       return 0;
     }
+    log_error("Delete xip %s rid %lu aid %lu: failed to find", ab1, rid, aid);
     return -1;
   }
 
   /* Not Found */
+  log_error("Delete xip %s rid %lu aid %lu: no such entry", ab1, rid, aid);
   return -1;
 }
 
@@ -2303,12 +2341,17 @@ llb_add_map_elem_nat_post_proc(void *k, void *v)
 
     if (ep_arm->inactive) {
       inact_aids[j++] = i;
+      //if (!ep_arm->nv6) llb_delete_nat_ep(ep_arm->nat_xip[0], na->ca.cidx, i);
+    } else {
+      //if (!ep_arm->nv6) llb_add_nat_ep(ep_arm->nat_xip[0], na->ca.cidx, i);
     }
   }
 
+#if 0  // FIXME - Try to maintain existing connections in any case 
   if (j > 0) {
     ll_map_ct_rm_related(na->ca.cidx, inact_aids, j);
   }
+#endif
 
   free(inact_aids);
 
@@ -2333,6 +2376,7 @@ llb_del_map_elem_nat_post_proc(void *k, void *v)
 
     if (ep_arm->inactive == 0) {
       inact_aids[j++] = i;
+      //if (!ep_arm->nv6) llb_delete_nat_ep(ep_arm->nat_xip[0], na->ca.cidx, i);
     }
   }
 
@@ -2343,7 +2387,6 @@ llb_del_map_elem_nat_post_proc(void *k, void *v)
   free(inact_aids);
 
   return 0;
-
 }
 
 static void
@@ -2774,7 +2817,6 @@ int
 llb_del_map_elem_wval(int tbl, void *k, void *v)
 {
   int ret = -EINVAL;
-  struct dp_proxy_tacts *t = NULL;
 
   if (tbl < 0 || tbl >= LL_DP_MAX_MAP) {
     return ret;
@@ -2818,18 +2860,8 @@ llb_del_map_elem_wval(int tbl, void *k, void *v)
   }
 
   /* Need some post-processing for certain maps */
-  if (tbl == LL_DP_NAT_MAP) {
-    t = calloc(1, sizeof(struct dp_proxy_tacts));
-    assert(t);
-    ret = bpf_map_lookup_elem(llb_map2fd(tbl), k, t);
-    if (ret != 0) {
-      XH_UNLOCK();
-      free(t);
-      return -EINVAL;
-    }
-
-    llb_del_map_elem_nat_post_proc(k, t);
-    free(t);
+  if (tbl == LL_DP_NAT_MAP && v != NULL) {
+    llb_del_map_elem_nat_post_proc(k, v);
   }
 
   XH_UNLOCK();
