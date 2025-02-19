@@ -576,7 +576,10 @@ llb_handle_sep_resolution(struct epsess *eps, int do_remote)
     int ret = bpf_map_lookup_elem_flags(llb_map2fd(LL_DP_NAT_SEP_MAP), &key, &epa, BPF_F_LOCK);
     if (ret == 0) {
       teps = &epa.active_sess;
-      if (teps->inactive) continue;
+      if (teps->inactive) {
+        XH_UNLOCK();
+        continue;
+      }
 
       if (lts - teps->lts > 30000000000 || teps->id == 0 || teps->id == eps->id) {
         teps->lts = lts;
