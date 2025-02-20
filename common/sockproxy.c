@@ -1608,10 +1608,6 @@ proxy_pdestroy(void *priv)
       }
     }
 
-    log_info("sockproxy: %s:%u %d freed\n",
-              inet_ntoa(*(struct in_addr *)&ent->key.xip),
-              ntohs(ent->key.xport), pfe->odir);
-
     if (!is_listener) {
       proxy_release_rfd_ctx(pfe);
     }
@@ -2034,7 +2030,7 @@ try_setup_inactive_ep(proxy_fd_ent_t *pfe)
 {
   proxy_fd_ent_t *npfe2;
   proxy_map_ent_t *ent;
-  void *ssl;
+  void *ssl = NULL;
 
   ent = pfe->head;
 
