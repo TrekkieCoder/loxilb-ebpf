@@ -1652,12 +1652,19 @@ proxy_destroy_eps(int sfd, proxy_ep_sel_t *ep_sel)
 static int
 proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
 {
+  int n_rfd_active = 0;
   *ep = 0;
+
+  for (int i = 0; i < pfe->n_rfd; i++) {
+    if (pfe->rfd_ent[i] != NULL) {
+      n_rfd_active++;
+    }
+  }
 
   switch (pfe->seltype) {
   case PROXY_SEL_N2:
-    *ep = ngap_proto_epsel_helper(inbuf, insz, pfe->n_rfd);
-    if (*ep < 0 || *ep > pfe->n_rfd) {
+    *ep = ngap_proto_epsel_helper(inbuf, insz, n_rfd_active);
+    if (*ep < 0 || *ep > n_rfd_active) {
       if (*ep == -2 && pfe->odir && pfe->ep_num > 0) {
         log_debug("drop n2 ep(%d)", pfe->ep_num);
         return PROXY_SEL_EP_DROP;
@@ -1667,8 +1674,8 @@ proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
     log_debug("n2 ep(%d)", *ep);
     break;
   default:
-    if (pfe->n_rfd > 1) {
-      *ep = pfe->lsel % pfe->n_rfd;
+    if (n_rfd_active > 1) {
+      *ep = pfe->lsel % n_rfd_active;
       pfe->lsel++;
     }
     break;
