@@ -8,6 +8,16 @@
 
 #include "llhttp.h"
 
+#define PROXY_LOCK() pthread_rwlock_wrlock(&proxy_struct->lock)
+#define PROXY_RDLOCK() pthread_rwlock_rdlock(&proxy_struct->lock)
+#define PROXY_UNLOCK() pthread_rwlock_unlock(&proxy_struct->lock)
+
+#define PROXY_ENT_LOCK(e) pthread_rwlock_wrlock(&e->lock)
+#define PROXY_ENT_UNLOCK(e) pthread_rwlock_unlock(&e->lock)
+
+#define PROXY_ENT_CLOCK(e) pthread_rwlock_wrlock(&e->cache_lock)
+#define PROXY_ENT_CUNLOCK(e) pthread_rwlock_unlock(&e->cache_lock)
+
 typedef enum {
   PROXY_SOCK_LISTEN = 1,
   PROXY_SOCK_ACTIVE,
@@ -22,11 +32,23 @@ struct proxy_cache {
 };
 typedef struct proxy_cache proxy_cache_t;
 
+typedef struct proxy_ep_val {
+  int ep_cfd;
+  int ep_num;
+  uint32_t epip;
+  uint16_t epport;
+  uint8_t epprotocol;
+  void *epv;
+} proxy_ep_val_t;
+
 struct proxy_fd_ent {
+  pthread_rwlock_t lock;
+  int used;
   int fd;
 #define MAX_PROXY_EP LLB_MAX_NXFRMS
   int rfd[MAX_PROXY_EP];
   struct proxy_fd_ent *rfd_ent[MAX_PROXY_EP];
+  proxy_ep_val_t epinfo[MAX_PROXY_EP];
   int n_rfd;
   int mode;
   int ep_num;
@@ -37,6 +59,7 @@ struct proxy_fd_ent {
   int ssl_err;
   uint32_t _id;
   proxy_socktype_t stype;
+  pthread_rwlock_t cache_lock;
   proxy_cache_t *cache_head;
   struct proxy_fd_ent *next;
   void *head;
