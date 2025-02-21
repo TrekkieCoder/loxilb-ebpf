@@ -957,6 +957,7 @@ static void
 proxy_free_fd_ctx(proxy_fd_ent_t *pfe)
 {
   if (pfe->used <= 0) {
+    if (pfe->setup_msg != NULL) free(pfe->setup_msg);  
     free(pfe);
   }
 }
@@ -1131,6 +1132,8 @@ proxy_client_ssl_ctx_init(void)
   return ctx;
 }
 
+static void proxy_reset_endpoint_fd(proxy_map_ent_t *ent, int ep_num);
+
 int
 proxy_add_entry(proxy_ent_t *new_ent, proxy_arg_t *arg)
 {
@@ -1146,12 +1149,37 @@ proxy_add_entry(proxy_ent_t *new_ent, proxy_arg_t *arg)
 
   while (ent) {
     if (cmp_proxy_ent(&ent->key, new_ent)) {
-      proxy_epval_t *eval = NULL;
       HASH_FIND_STR(ent->val.ephash, arg->host_url, tepval);
-      if (eval != NULL) {
+      if (tepval != NULL) {
+        int update = 0;
+        for (int i = 0; i < tepval->n_eps; i++) {
+          proxy_ent_t *tepent = &tepval->eps[i];
+          int match = 0;
+          for (int j = 0; j < arg->n_eps; j++) {
+            proxy_ent_t *epent = &arg->eps[j];
+            if (!memcmp(tepent, epent, sizeof(proxy_ent_t))) {
+              match = 1;
+              break;
+            }
+          }
+
+          if (match == 0) {
+            update++;
+            proxy_reset_endpoint_fd(ent, i);
+          }
+        }
+
+        if (tepval->n_eps != arg->n_eps) update = true;
+
+        if (update) {
+          tepval->n_eps = arg->n_eps;
+          memcpy(tepval->eps, arg->eps, sizeof(arg->eps));
+        }
+        
         PROXY_UNLOCK();
-        log_info("sockproxy : %s:%u exists",
-          inet_ntoa(*(struct in_addr *)&ent->key.xip), ntohs(ent->key.xport));
+        log_info("sockproxy : %s:%u exists - update:%s",
+          inet_ntoa(*(struct in_addr *)&ent->key.xip), ntohs(ent->key.xport), update ? "yes": "no");
+        if (update) return 0;
         return -EEXIST;
       } else {
         tepval = calloc(1, sizeof(*tepval));
@@ -1371,7 +1399,7 @@ proxy_dump_entry(proxy_info_cb_t cb)
 
           if (!cb) proxy_ct_dump("dir", &pct.ct_in);
           for (j = 0; j < fd_ent->n_rfd; j++) {
-            if (!proxy_ct_from_fd(fd_ent->rfd[j], &pct.ct_out, 1)) {
+            if (fd_ent->rfd_ent[j] && !proxy_ct_from_fd(fd_ent->rfd[j], &pct.ct_out, 1)) {
               if (!cb) proxy_ct_dump("rdir", &pct.ct_out);
               pct.st_out.bytes = fd_ent->rfd_ent[j]->ntb;
               pct.st_out.bytes += fd_ent->rfd_ent[j]->nrb;
@@ -1516,6 +1544,30 @@ proxy_release_fd_ctx(proxy_fd_ent_t *fd_ent, int reset)
 }
 
 static void
+proxy_reset_endpoint_fd(proxy_map_ent_t *ent, int ep_num)
+{
+  proxy_fd_ent_t *fd_ent;
+
+  if (!ent) return;
+
+  fd_ent = ent->val.fdlist;
+
+  while (fd_ent) {
+    if (!fd_ent->odir) {
+      for (int i = 0; i < fd_ent->n_rfd; i++) {
+        if (fd_ent->epinfo[i].ep_num == ep_num) {
+          fd_ent->epinfo[i].ep_num = -1;
+        }
+      }
+    }
+    if (fd_ent->ep_num == ep_num) {
+      proxy_release_fd_ctx(fd_ent, 0);
+    }
+    fd_ent = fd_ent->next;
+  }
+}
+
+static void
 proxy_release_rfd_ctx(proxy_fd_ent_t *pfe)
 {
   proxy_fd_ent_t *fd_ent;
@@ -1653,6 +1705,7 @@ static int
 proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
 {
   int n_rfd_active = 0;
+  int do_buf = 0;
   *ep = 0;
 
   for (int i = 0; i < pfe->n_rfd; i++) {
@@ -1663,7 +1716,14 @@ proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
 
   switch (pfe->seltype) {
   case PROXY_SEL_N2:
-    *ep = ngap_proto_epsel_helper(inbuf, insz, n_rfd_active);
+    *ep = ngap_proto_epsel_helper(inbuf, insz, n_rfd_active, &do_buf);
+    if (do_buf) {
+      if (pfe->setup_msg != NULL) free(pfe->setup_msg);
+      pfe->setup_msg = malloc(insz);
+      assert(pfe->setup_msg);
+      memcpy(pfe->setup_msg, inbuf, insz);
+      pfe->setup_msg_len = insz;
+    }
     if (*ep < 0 || *ep > n_rfd_active) {
       if (*ep == -2 && pfe->odir && pfe->ep_num > 0) {
         log_debug("drop n2 ep(%d)", pfe->ep_num);
@@ -1671,7 +1731,7 @@ proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
       }
       return PROXY_SEL_EP_BC;
     }
-    log_debug("n2 ep(%d)", *ep);
+    log_trace("n2 ep(%d)", *ep);
     break;
   default:
     if (n_rfd_active > 1) {
@@ -2042,7 +2102,7 @@ try_setup_inactive_ep(proxy_fd_ent_t *pfe)
   ent = pfe->head;
 
   for (int i = 0; i < pfe->n_rfd; i++) {
-    if (pfe->rfd_ent[i] == NULL) {
+    if (pfe->rfd_ent[i] == NULL && pfe->epinfo[i].ep_num >= 0) {
       pfe->epinfo[i].ep_cfd = proxy_setup_ep_connect(pfe->epinfo[i].epip, 
                                     pfe->epinfo[i].epport, 
                                     pfe->epinfo[i].epprotocol, ent->val.ssl_epctx, &ssl);
@@ -2070,6 +2130,10 @@ try_setup_inactive_ep(proxy_fd_ent_t *pfe)
 
         pfe->rfd[i] = pfe->epinfo[i].ep_cfd;
         pfe->rfd_ent[i] = npfe2;
+
+        if (pfe->setup_msg) {
+          proxy_try_epxmit(pfe, pfe->setup_msg, pfe->setup_msg_len, i);
+        }
       }
     }
   }

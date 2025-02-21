@@ -48,7 +48,7 @@ do {                                                              \
 } while(0)
 
 int
-ngap_proto_unmarshal_ueid(void *msg, size_t len, uint32_t *identifier)
+ngap_proto_unmarshal_ueid(void *msg, size_t len, uint32_t *identifier, int *do_buf)
 {
   struct NGAP_NGAP_PDU m = { 0 };
   struct NGAP_NGAP_PDU *pdu = &m;
@@ -79,6 +79,9 @@ ngap_proto_unmarshal_ueid(void *msg, size_t len, uint32_t *identifier)
           pdu->present == NGAP_NGAP_PDU_PR_unsuccessfulOutcome) {
         rval = -2;
       }
+      if (im->procedureCode == NGAP_ProcedureCode_id_NGSetup) {
+        *do_buf = 1;
+      }
       /* Non-NAS messages */
       break;
     default: {
@@ -103,13 +106,13 @@ ngap_proto_unmarshal_ueid(void *msg, size_t len, uint32_t *identifier)
 }
 
 int
-ngap_proto_epsel_helper(void *msg, size_t len, int max_ep)
+ngap_proto_epsel_helper(void *msg, size_t len, int max_ep, int *do_buf)
 {
   uint32_t hash;
   uint32_t id;
   int ret;
 
-  if ((ret = ngap_proto_unmarshal_ueid(msg, len, &id)) < 0) {
+  if ((ret = ngap_proto_unmarshal_ueid(msg, len, &id, do_buf)) < 0) {
     return ret;
   }
 

@@ -6,5 +6,5 @@
 #ifndef __NGAP_PROTO_HELPER_H__
 #define __NGAP_PROTO_HELPER_H__
 
-int ngap_proto_epsel_helper(void *msg, size_t len, int max_eps);
+int ngap_proto_epsel_helper(void *msg, size_t len, int max_eps, int *do_buf);
 #endif
