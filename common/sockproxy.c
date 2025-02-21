@@ -1726,12 +1726,26 @@ proxy_select_ep(proxy_fd_ent_t *pfe, void *inbuf, size_t insz, int *ep)
     }
     if (*ep < 0 || *ep > n_rfd_active) {
       if (*ep == -2 && pfe->odir && pfe->ep_num > 0) {
-        log_debug("drop n2 ep(%d)", pfe->ep_num);
+        log_trace("drop n2 ep(%d)", pfe->ep_num);
         return PROXY_SEL_EP_DROP;
       }
       return PROXY_SEL_EP_BC;
     }
-    log_trace("n2 ep(%d)", *ep);
+
+    int real_ep = -1;
+    for (int i = 0; i < pfe->n_rfd; i++) {
+      if (pfe->rfd_ent[i] == NULL) {
+        continue;
+      }
+      real_ep++;
+      if (real_ep == *ep) {
+        *ep = i;
+        //log_trace("n2 realep(%d:%d)", *ep, real_ep);
+        break;
+      }
+    }
+
+    //log_trace("n2 ep(%d)", *ep);
     break;
   default:
     if (n_rfd_active > 1) {
