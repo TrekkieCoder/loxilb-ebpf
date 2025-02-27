@@ -329,6 +329,20 @@ proxy_list_xmitcache(proxy_fd_ent_t *ent)
 }
 
 static int
+proxy_send(proxy_fd_ent_t *pfe, uint8_t *sbuf, size_t len)
+{
+  if (pfe->seltype == PROXY_SEL_N2) {
+    return sctp_sendmsg(pfe->fd,
+                (uint8_t *)(sbuf), len,
+                 NULL, 0,
+                 pfe->ppid,
+                 0, 0, 0, 0);
+  } else {
+    return send(pfe->fd, sbuf, len, MSG_DONTWAIT|MSG_NOSIGNAL);
+  }
+}
+
+static int
 proxy_xmit_cache(proxy_fd_ent_t *ent)
 {
   struct proxy_cache *curr;
@@ -345,7 +359,7 @@ proxy_xmit_cache(proxy_fd_ent_t *ent)
 
   while (curr) {
     if (!ent->ssl) {
-      n = send(ent->fd, (uint8_t *)(curr->cache) + curr->off, curr->len, MSG_DONTWAIT|MSG_NOSIGNAL);
+      n = proxy_send(ent, (uint8_t *)(curr->cache) + curr->off, curr->len);
       if (n <= 0) {
         /* errno == EAGAIN || errno == EWOULDBLOCK */
         //log_debug("Failed to send cache");
@@ -437,7 +451,7 @@ proxy_try_epxmit(proxy_fd_ent_t *ent, void *msg, size_t len, int sel)
     }
 
     if (!rfd_ent->ssl) {
-      n = send(ent->rfd[sel], msg, len, MSG_DONTWAIT|MSG_NOSIGNAL);
+      n = proxy_send(rfd_ent, msg, len);
     } else {
       n = SSL_write(rfd_ent->ssl, msg, len);
       if (n <= 0) {
@@ -1969,6 +1983,9 @@ setup_proxy_path(smap_key_t *key, smap_key_t *rkey, proxy_fd_ent_t *pfe, const c
     npfe2->n_rfd++;
     npfe2->head = ent;
     npfe2->ssl = ssl;
+    if (npfe1->seltype == PROXY_SEL_N2) {
+      npfe2->ppid = htonl(60);
+    }
 
     PROXY_LOCK();
     npfe2->next = ent->val.fdlist;
@@ -2232,6 +2249,9 @@ restart:
         npfe1->ep_num = -1;
         npfe1->head = ent;
         npfe1->ssl = ssl;
+        if (npfe1->seltype == PROXY_SEL_N2) {
+          npfe1->ppid = htonl(60);
+        }
 
         llhttp_settings_init(&npfe1->settings);
 	      npfe1->settings.on_message_complete = handle_on_message_complete;

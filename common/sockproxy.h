@@ -67,6 +67,7 @@ struct proxy_fd_ent {
   void *epv;
   void *setup_msg;
   size_t setup_msg_len;
+  uint32_t ppid;
   uint64_t nrb;
   uint64_t nrp;
   uint64_t ntb;
